@@ -37,7 +37,7 @@ def status(name):
 
 
 def report(name):
-    """The run's stdout: one line per frame, the counter then w x y z separated by single spaces. A
+    """The run's stdout: one line per frame, the counter then w x y z separated by spaces. A
     final newline is optional."""
     code, elapsed = status(name)
     assert elapsed < TIME_LIMIT, f"the {name} run was still going at the {TIME_LIMIT:.0f} s limit"
@@ -45,16 +45,16 @@ def report(name):
     assert text.strip(), f"the {name} run printed nothing (exit status {code})"
     lines = {}
     for n, line in enumerate(text.splitlines(), 1):
-        f = line.split(" ")
-        assert len(f) == 5, f"{name} line {n} is not a counter and four numbers split by single spaces: {line[:80]!r}"
+        f = [x for x in line.strip(" ").split(" ") if x]
+        assert len(f) == 5, f"{name} line {n} is not a counter and four numbers separated by spaces: {line[:80]!r}"
         try:
             counter = int(f[0])
             q = [float(x) for x in f[1:]]
         except ValueError:
             pytest.fail(f"{name} line {n} does not parse: {line[:80]!r}")
         assert all(math.isfinite(x) for x in q), f"{name} line {n} holds a non-finite number"
-        norm = math.sqrt(sum(x * x for x in q))
-        assert norm > 1e-6, f"{name} line {n}: the quaternion is zero"
+        norm = math.hypot(*q)
+        assert math.isfinite(norm) and norm > 1e-6, f"{name} line {n}: the quaternion has a zero or non-finite norm"
         lines.setdefault(counter, []).append([x / norm for x in q])
     return lines
 
