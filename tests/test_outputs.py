@@ -1,100 +1,132 @@
-"""Verifier for the skeleton task.
-
-Two things are graded independently. The report has to match the approved bytes for the
-shipped inputs, and the agent's own program has to reproduce those bytes when re-run
-against inputs it has never seen. The second is what stops a hand-written report from
-passing: the artifact alone is cheap to fake, re-deriving it on held-out data is not.
-
-Replace the whole file for a real task, but keep the shape: golden bytes, a held-out
-re-run, and a determinism check.
-"""
-
-import hashlib
+"""Grades the two runs test.sh made: the tracker rebuilt from the collected Swift, run once against
+the shipped pass on another address and once against a held-back pass from another camera unit,
+reached by name. Nothing here solves an attitude: every reported quaternion is compared with the
+true attitude the pass's generator (solution/generate_pass.py) recorded for that frame, baked
+into this image."""
 import json
-import shutil
-import subprocess
-from pathlib import Path
+import math
+import os
 
 import pytest
 
-APP = Path("/app")
-SRC = APP / "src" / "summarize.py"
-REPORT = APP / "out" / "report.json"
-DATA = APP / "data"
-HOLDOUT = Path("/tests/holdout")
-
-# Scratch space owned by the sandbox user; see tests/Dockerfile.
-WORK_OUT = Path("/work/out")
-
-SANDBOX_UID = 12000
-DROP_PRIVILEGES = [
-    "setpriv",
-    f"--reuid={SANDBOX_UID}",
-    f"--regid={SANDBOX_UID}",
-    "--clear-groups",
-]
-
-# SHA-256 of the report each input set must produce. Generated from solution/src.
-EXPECTED_PRIMARY = "60fec4718722649de61a0a56094fa49cf19597bd942244b27c77cea81352ce57"
-EXPECTED_HOLDOUT = {"h1": "a3cca7560ba22f8ec8e43ead53cee7566e713086e19c21ef42bd785bc7da77ba"}
+RUN = "/opt/run"
+TRUTH = "/opt/truth"
+PASSES = ["sample", "hidden"]
+BORESIGHT_BAR = 6.5      # arcsec, on at least 99% of the graded frames
+BORESIGHT_SHARE = 0.99
+BORESIGHT_CAP = 60.0     # arcsec, on every graded frame
+ROLL_BAR = 180.0         # arcsec, on every graded frame
+TIME_LIMIT = 120.0
+ARCSEC = 180.0 / math.pi * 3600.0
 
 
-def sha256(path):
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def read_text(path):
+    """Opens without following a symlink, so a link planted at the path is refused."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as fh:
+        return fh.read().decode("utf-8", "replace")
 
 
-def run_agent_program(data_dir, out_path):
-    """Runs the agent's own program, unprivileged, against a directory of our choosing."""
-    return subprocess.run(
-        DROP_PRIVILEGES
-        + ["python3", str(SRC), "--data", str(data_dir), "--out", str(out_path)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
+def golden(name):
+    return json.loads(read_text(os.path.join(TRUTH, "golden", name + ".json")))
 
 
-def test_report_exists():
-    """The declared artifact was produced at the documented path."""
-    assert REPORT.is_file(), f"{REPORT} was not created"
+def status(name):
+    code, t0, t1 = read_text(os.path.join(RUN, f"status_{name}.txt")).split()
+    return int(code), float(t1) - float(t0)
 
 
-def test_report_is_valid_json():
-    """The report parses and carries the documented top-level keys."""
-    data = json.loads(REPORT.read_text())
-    assert set(data) == {"files", "total_words"}, f"unexpected top-level keys: {sorted(data)}"
+def report(name):
+    """The run's stdout: one line per frame, the counter then w x y z. A final newline is optional."""
+    code, elapsed = status(name)
+    assert elapsed < TIME_LIMIT, f"the {name} run was still going at the {TIME_LIMIT:.0f} s limit"
+    text = read_text(os.path.join(RUN, f"report_{name}.txt"))
+    assert text.strip(), f"the {name} run printed nothing (exit status {code})"
+    lines = {}
+    for n, line in enumerate(text.splitlines(), 1):
+        f = line.split()
+        assert len(f) == 5, f"{name} line {n} is not a counter and four numbers: {line[:80]!r}"
+        try:
+            counter = int(f[0])
+            q = [float(x) for x in f[1:]]
+        except ValueError:
+            pytest.fail(f"{name} line {n} does not parse: {line[:80]!r}")
+        assert all(math.isfinite(x) for x in q), f"{name} line {n} holds a non-finite number"
+        norm = math.sqrt(sum(x * x for x in q))
+        assert norm > 1e-6, f"{name} line {n}: the quaternion is zero"
+        lines.setdefault(counter, []).append([x / norm for x in q])
+    return lines
 
 
-def test_report_matches_approved_bytes():
-    """The report is byte-identical to the approved output for the shipped inputs."""
-    actual = sha256(REPORT)
-    assert actual == EXPECTED_PRIMARY, (
-        f"report.json does not match the approved bytes\n"
-        f"  expected sha256 {EXPECTED_PRIMARY}\n  actual   sha256 {actual}"
-    )
+def attitude(q):
+    """A = the rotation taking ICRS coordinates to camera coordinates (README.md's matrix)."""
+    w, x, y, z = q
+    return [[w * w + x * x - y * y - z * z, 2 * (x * y + w * z), 2 * (x * z - w * y)],
+            [2 * (x * y - w * z), w * w - x * x + y * y - z * z, 2 * (y * z + w * x)],
+            [2 * (x * z + w * y), 2 * (y * z - w * x), w * w - x * x - y * y + z * z]]
 
 
-@pytest.mark.parametrize("name", sorted(EXPECTED_HOLDOUT))
-def test_holdout_reproduces_approved_bytes(name):
-    """Re-running the agent's program on unseen inputs reproduces the approved bytes.
-
-    This is the anti-cheat axis: it proves the report on disk was generated by the
-    program rather than written by hand or pinned to the shipped fixtures.
-    """
-    out = WORK_OUT / f"{name}.json"
-    result = run_agent_program(HOLDOUT / name, out)
-    assert result.returncode == 0, f"program failed on held-out set {name}:\n{result.stderr}"
-
-    actual = sha256(out)
-    assert actual == EXPECTED_HOLDOUT[name], (
-        f"held-out set {name} did not reproduce the approved bytes\n"
-        f"  expected sha256 {EXPECTED_HOLDOUT[name]}\n  actual   sha256 {actual}"
-    )
+def errors(q_true, q_rep):
+    """Boresight error (angle between the two camera +z axes) and roll error (angle between the
+    camera +x axes about the true boresight), both in arcseconds."""
+    n = math.sqrt(sum(c * c for c in q_true))
+    at, ar = attitude([c / n for c in q_true]), attitude(q_rep)
+    zt, zr = at[2], ar[2]
+    cr = (zt[1] * zr[2] - zt[2] * zr[1], zt[2] * zr[0] - zt[0] * zr[2], zt[0] * zr[1] - zt[1] * zr[0])
+    point = math.atan2(math.sqrt(sum(c * c for c in cr)), sum(zt[i] * zr[i] for i in range(3))) * ARCSEC
+    xr = ar[0]
+    d = sum(xr[i] * zt[i] for i in range(3))
+    p = [xr[i] - d * zt[i] for i in range(3)]
+    roll = math.atan2(sum(p[i] * at[1][i] for i in range(3)), sum(p[i] * at[0][i] for i in range(3))) * ARCSEC
+    return point, abs(roll)
 
 
-def test_output_is_deterministic():
-    """Two runs over the same inputs produce identical bytes."""
-    first, second = WORK_OUT / "det-1.json", WORK_OUT / "det-2.json"
-    for out in (first, second):
-        assert run_agent_program(DATA, out).returncode == 0, "program failed on shipped inputs"
-    assert sha256(first) == sha256(second), "program output is not deterministic"
+def graded_errors(name):
+    rep, g = report(name), golden(name)
+    out = {}
+    for c in g["graded"]:
+        got = rep.get(c)
+        assert got, f"{name}: graded frame {c} has no line"
+        assert len(got) == 1, f"{name}: graded frame {c} has {len(got)} lines"
+        out[c] = errors(g["q"][str(c)], got[0])
+    return out
+
+
+def test_tracker_built():
+    """The collected .swift files built into a binary with swiftc -O -static-stdlib."""
+    assert read_text(os.path.join(RUN, "build_check.txt")).strip() == "ok", \
+        "the collected Swift did not build (see the swiftc output in the log)"
+
+
+@pytest.mark.parametrize("name", PASSES)
+def test_every_graded_frame_has_one_line(name):
+    """Every frame with six or more catalogue stars detected has exactly one well-formed line, and the
+    camera head really did drop the link mid-pass and reach the end of it."""
+    rep, g = report(name), golden(name)
+    missing = [c for c in g["graded"] if c not in rep]
+    assert not missing, f"{name}: {len(missing)} graded frame(s) have no line, e.g. {missing[:5]}"
+    doubled = [c for c in g["graded"] if len(rep[c]) > 1]
+    assert not doubled, f"{name}: graded frame(s) with more than one line, e.g. {doubled[:5]}"
+    log = read_text(os.path.join(RUN, f"camera_{name}.log"))
+    assert log.count("LINK DOWN") >= 2 and " EOS " in log, f"{name}: the camera head's link drops never came up"
+
+
+@pytest.mark.parametrize("name", PASSES)
+def test_boresight_within_bars(name):
+    """The boresight is within 6.5 arcsec of the truth on at least 99% of graded frames and within
+    60 arcsec on every one."""
+    err = graded_errors(name)
+    point = sorted((e[0], c) for c, e in err.items())
+    over = [(round(p, 2), c) for p, c in point if p > BORESIGHT_BAR]
+    allowed = int((1.0 - BORESIGHT_SHARE) * len(point))
+    assert len(over) <= allowed, (f"{name}: {len(over)} of {len(point)} graded frames have the boresight more than "
+                                  f"{BORESIGHT_BAR} arcsec off (at most {allowed} may), worst {over[-5:]}")
+    assert point[-1][0] <= BORESIGHT_CAP, f"{name}: frame {point[-1][1]} has the boresight {point[-1][0]:.1f} arcsec off"
+
+
+@pytest.mark.parametrize("name", PASSES)
+def test_roll_within_3_arcmin(name):
+    """The roll about the boresight is within 180 arcsec of the truth on every graded frame."""
+    err = graded_errors(name)
+    bad = sorted(((round(e[1], 1), c) for c, e in err.items() if e[1] > ROLL_BAR), reverse=True)
+    assert not bad, f"{name}: {len(bad)} graded frame(s) with the roll more than {ROLL_BAR:.0f} arcsec off, worst {bad[:5]}"

@@ -1,77 +1,46 @@
-# TB3.0 task manifest.
-#
-# Every field below is required unless marked optional. The four prose fields
-# (difficulty/solution/verification/relevant_experience) are what a reviewer reads
-# first — write them last, once the task actually works, and write them honestly.
+name = "star-tracker"
 
-name = "REPLACE-task-slug"
-
-# Paths the SEPARATE verifier reads out of the agent's final container. Declare the
-# whole project directory when the verifier needs to rebuild or re-run the agent's
-# own sources, not just inspect an output file.
-artifacts = ["/app/"]
+# The one path the separate verifier collects from the agent's final container. A top-level key
+# on purpose: Harbor ignores an artifacts list placed under [verifier].
+artifacts = [
+    "/app/tracker/",
+]
 
 [metadata]
-author_name = "REPLACE"
-author_email = "REPLACE"
-
-# category must be one of: Science, Software, ML, Operations, Security, Hardware, Media
-# subcategory is an open list — see the taxonomy for the conventional values.
-category = "REPLACE"
-subcategory = "REPLACE"
-tags = ["REPLACE", "3-to-6", "descriptive", "keywords"]
-languages = ["REPLACE"]
-
-# One of: base, core, advanced, frontier — set from measured pass rates, not by feel.
-difficulty = "REPLACE"
-expert_time_estimate_hours = 0  # REPLACE with a real best-case estimate for a domain expert
-
-difficulty_explanation = """\
-REPLACE. What specifically defeats a strong agent here? Name the concrete traps and \
-why partial progress still fails. A reviewer who does not know your domain should \
-finish this paragraph understanding the shape of the difficulty.\
+author_name = "anonymous"
+author_email = "anonymous"
+category = "Science"
+subcategory = "Robotics"
+tags = ["swift", "star-tracker", "attitude-determination", "stellar-aberration", "lost-in-space", "camera-calibration"]
+languages = ["swift"]
+difficulty = "advanced"
+expert_time_estimate_hours = 8
+is_multi_container = true
+difficulty_explanation = """
+The agent writes the attitude solver for a spacecraft star tracker in Swift with nothing but the standard library: it reads a recorded pass from a camera head over TCP (spot lists per frame, the exposure and the spacecraft's velocity relative to the solar system's centre of mass, with the link dropping every so many frames), identifies the stars against a catalogue, and reports the camera's inertial attitude for every frame, graded against the true geometric attitude to arc seconds. Three things decide whether the numbers are right, and none of them shows up as an error in the program's own output. The spacecraft moves at 25 to 34 km/s relative to the solar system's centre of mass, so every star appears shifted toward the velocity apex by up to 23 arc seconds; the velocity sits in every frame header and nothing says what it is for, and a solver that matches the catalogue directions as printed puts the pointing axis 21.7 arc seconds off at the 99th percentile on the shipped pass and 22.8 on the held-back one, against a 6.5 arc second bar. The camera's focal length and third-order distortion differ from the lens drawing the camera head announces and can only be recovered from the matched stars themselves: the drawing values leave the pointing axis 28.1 and 23.4 arc seconds off, and fitting the focal length while leaving the distortion at zero still leaves 12.5 and 15.0, where the reference, which fits both jointly with the attitudes, is at 1.9 and 1.5. And the held-back pass comes with a 60,000-star flight catalogue where the shipped one has 9,000: the exact index a careful engineer builds first, every catalogue triangle whose sides fit across the field, holds 9.55 million triangles on the shipped sky and solves it, and on the flight catalogue it runs out of the stated 2 GiB before a frame is solved; so does a pair index over every catalogue star. Around that sit the things a flight tracker has to survive: hot pixels, particle hits, a planet and blended stars among the spots, eclipses and slews after which the attitude has to be found from scratch, and a sky that includes the celestial pole. What makes this hard for an expert is that each shortcut produces a smooth, plausible attitude history with small residuals; knowing that it is wrong takes knowing the physics of apparent star positions and the habits of uncalibrated optics, and designing an identification scheme that scales to a flight catalogue.
 """
-
-solution_explanation = """\
-REPLACE. The reference approach at a level someone could follow without reading \
-solve.sh — what has to be discovered, in what order, and what the key insight is.\
+solution_explanation = """
+solve.sh places solution/main.swift in /app/tracker and builds it with the Swift compiler at -O with a static standard library, the command the grader uses. The tracker reads the whole pass from the camera head at CAMERA_HOST and CAMERA_PORT (a name or an address), sending START for the next counter after every LINK DOWN until EOS, and loads the catalogue at STAR_CATALOG. Spots that sit on the same pixel in more than a fifth of the frames are the detector's hot pixels. Lost in space uses a sorted pair-angle index over only the brightest catalogue stars (about fourteen per field of view, so the index stays small whatever the catalogue's depth): triangles of the nine brightest spots are matched to catalogue triangles through the index with a tolerance wide enough for an uncalibrated lens, each hypothesis is turned into an attitude and verified by projecting the catalogue into the frame and counting matched spots. Tracking predicts each frame's attitude from the last two, matches projected catalogue stars to spots, solves for the weighted least-squares rotation with Davenport's q-method (weights from spot signal, blended or stray matches dropped at four times the median residual) and falls back to lost in space when fewer than six stars match or the residual is too large. Every catalogue direction is shifted by the frame's velocity with the special-relativistic aberration formula before it is compared with the camera. After the first pass the focal length and distortion coefficient are fitted by linear least squares to every matched star, alternating with the attitudes for four rounds, and the pass is solved again with the fitted optics. solution/generate_pass.py rebuilds the shipped pass, the held-back pass and both golden files byte for byte.
 """
-
-verification_explanation = """\
-REPLACE. What the verifier grades, how it grades it, and why passing it is only \
-possible by actually doing the work. Call out each independent axis of failure.\
+verification_explanation = """
+The grader receives the tracker's folder, /app/tracker, and nothing else from the agent's container. tests/test.sh copies the regular .swift files directly under it into a root-owned directory and builds them as an unprivileged user with the Swift compiler at -O with a static standard library, on the same toolchain with the Foundation and test-framework modules removed, so anything but the standard library and the C library bindings fails to compile. It then starts its own camera head twice from the copy in its image and runs the binary against each from /app/tracker, with a clean environment, a 2 GiB address-space limit and a seccomp launcher (tests/launch.c) that refuses any further exec: the shipped pass on 127.0.0.3 with a 23-frame first link and 1,597 frames per link after it, and the held-back pass (unit STU-C, other optics, another sky with a 60,000-star catalogue, another season and orbit, 12,000 frames of which 10,334 are graded) on a host name with 61 and 2,389. tests/test_outputs.py makes 7 checks. No attitude is computed at grading time; each graded frame's true quaternion comes from solution/generate_pass.py and sits root-only in the verifier image. Each run must finish inside 120 seconds of wall time (an exit status alone is not taken as a timeout), give every graded frame exactly one well-formed line, put the pointing axis within 6.5 arc seconds of the truth on at least 99% of graded frames and within 60 on all, and the roll within 180 arc seconds on all; the camera head's own log must show the link drops and the end of the pass. The 6.5 arc second bar sits at the midpoint of the measured gap: over the shipped and held-back passes and eight fresh seeds of each, the reference and an unweighted variant reach at most 2.6 arc seconds at the 99th percentile, and the nearest wrong route (focal length fitted, distortion ignored) at least 10.6. The tests, the passes, the true attitudes, the camera head and the log directory are closed to the build user and probed before the binary runs; pytest runs by absolute path in isolated mode (-I), every file it opens is opened with O_NOFOLLOW, and only root writes the reward. Through this verifier the reference earns reward 1, and each one-edit wrong variant kept in scripts/verify_arms.sh earns 0.
 """
-
-# NOTE: this one is a claim about you, not about the task. Rewrite it to match your
-# actual background before submitting; generic statements fail review.
-relevant_experience = """\
-REPLACE. The professional experience that qualifies you to set the difficulty and \
-correctness bar for this task.\
+relevant_experience = """
+I worked on attitude determination software for small-satellite star trackers, from lost-in-space identification and catalogue preparation to on-orbit calibration of the optics. The mistakes this task turns on are the ones I have seen in flight code reviews: a catalogue compared with observations without the velocity aberration term, focal length taken from the lens drawing because the residuals looked small, and a star identification index that worked on the development catalogue and would not fit in memory on the flight one.
 """
-
-# Network policy is set per phase. [environment] is the baseline and MUST be
-# "public" so the image build can install dependencies — the harnesses require it.
-# [agent] and [verifier] are the author's choice: either "public" or "no-network".
-# Those two values are the only permitted ones. Set all three phases explicitly
-# rather than relying on inheritance from the baseline.
 
 [verifier]
-timeout_sec = 600
-network_mode = "no-network"
-# "separate" is required: the verifier runs in its own container built from
-# tests/Dockerfile, after the agent's container is torn down. Tests and oracle data
-# are therefore never visible to the agent.
+timeout_sec = 1800
 environment_mode = "separate"
+network_mode = "public"
 
 [agent]
-timeout_sec = 3600
-# "no-network" if the task is meant to be solved offline; "public" if it genuinely
-# needs internet access. REPLACE to match your task.
-network_mode = "no-network"
+timeout_sec = 7200
+network_mode = "public"
 
 [environment]
 network_mode = "public"
-build_timeout_sec = 600
+build_timeout_sec = 1200
 cpus = 2
-memory_mb = 8192
+memory_mb = 4096
 storage_mb = 10240

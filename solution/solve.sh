@@ -1,20 +1,19 @@
 #!/bin/bash
-# Oracle solution.
+# Oracle. Puts the reference tracker in place and builds it the way the grader does.
 #
-# Document what was actually wrong and how the fix was derived — a reviewer reads this
-# to judge whether the task is solvable by reasoning rather than by guessing:
-#
-#   src/summarize.py   Three defects. Entries came back in filesystem order instead of
-#                      sorted by name; total_words counted files rather than words; and
-#                      the report was written without its trailing newline.
-#
-# Harbor mounts solution/ at /solution/ and runs this script as the oracle agent.
+# main.swift reads the whole pass from the camera head, resuming after every link drop, flags
+# the detector's hot pixels (spots that sit on the same pixel in a large share of frames), and
+# solves each frame: a lost-in-space solve (triangles of the brightest spots against a sorted
+# pair-angle index of the brightest catalogue stars, every hypothesis verified against the
+# whole field) starts each tracking arc, tracking carries the attitude between frames and falls
+# back to lost in space after a slew or an eclipse. The unit's focal length and third-order
+# distortion are then fitted to every matched star jointly with the attitudes, and the pass is
+# solved again with the fitted optics. Catalogue directions are aberrated by each frame's
+# barycentric velocity before they are compared with the camera, so the attitude printed is
+# the geometric one. generate_pass.py rebuilds the shipped and held-back passes.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-cp "$HERE/src/summarize.py" /app/src/summarize.py
-
-python3 /app/src/summarize.py --data /app/data --out /app/out/report.json
-
-sha256sum /app/out/report.json
+cp "$HERE/main.swift" /app/tracker/main.swift
+cd /app/tracker
+swiftc -O -static-stdlib -o /app/tracker/tracker /app/tracker/main.swift

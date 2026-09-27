@@ -1,0 +1,29 @@
+services:
+  # The tracker's container. The harness supplies its build and its keepalive command; this
+  # file only says where the camera head is.
+  main:
+    environment:
+      CAMERA_HOST: "127.0.0.1"
+      CAMERA_PORT: "7400"
+      STAR_CATALOG: "/app/sky/catalog.txt"
+
+  # The camera head replaying the recorded pass, in its own image. The runner puts every
+  # service in one network namespace, so it is reached on the loopback address.
+  camera:
+    build:
+      context: .
+      dockerfile: Dockerfile.camera
+    restart: unless-stopped
+    command:
+      - "python3"
+      - "/srv/camera/camera.py"
+      - "--data"
+      - "/srv/camera/pass.txt"
+      - "--host"
+      - "127.0.0.1"
+      - "--port"
+      - "7400"
+      - "--first-link"
+      - "40"
+      - "--link"
+      - "1500"
