@@ -67,7 +67,7 @@ The file at `STAR_CATALOG`: `#` lines are comments, every other line is
 
 ICRS directions as seen from the solar-system barycentre at the epoch of the pass (proper
 motion already applied). `/app/sky/catalog.txt` is the 9,000-star commissioning catalogue.
-Flight catalogues are cut deeper, to V 9, and hold up to 80,000 stars.
+Flight catalogues are cut deeper, to V 9, and hold up to 60,000 stars.
 
 ## Attitude
 

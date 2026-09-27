@@ -16,15 +16,18 @@ RUN apt-get update \
         tmux \
     && rm -rf /var/lib/apt/lists/*
 
-# The tracker is written against the Swift standard library and Glibc only. The Foundation and
-# XCTest module interfaces and static archives are removed, so `import Foundation` does not
-# compile here or in the grader. The toolchain's own shared libraries stay: the compiler driver
-# links against them.
+# The tracker is written against the Swift standard library and Glibc only. The Foundation,
+# Dispatch and XCTest module interfaces (and Foundation's static archives) are removed, so
+# importing them does not compile here or in the grader. The toolchain's own shared libraries
+# stay: the compiler driver links against them, and libdispatch.a stays because the static
+# standard library links it.
 RUN rm -rf /usr/lib/swift/linux/x86_64/Foundation*.swift* /usr/lib/swift/linux/x86_64/XCTest.swift* \
            /usr/lib/swift_static/linux/x86_64/Foundation*.swift* \
            /usr/lib/swift_static/linux/libFoundation*.a /usr/lib/swift_static/linux/libCoreFoundation.a \
            /usr/lib/swift_static/linux/libCFURLSessionInterface.a /usr/lib/swift_static/linux/libCFXMLInterface.a \
-           /usr/lib/swift/CoreFoundation /usr/lib/swift_static/CoreFoundation
+           /usr/lib/swift/CoreFoundation /usr/lib/swift_static/CoreFoundation \
+           /usr/lib/swift/linux/x86_64/Dispatch.swift* /usr/lib/swift_static/linux/x86_64/Dispatch.swift* \
+           /usr/lib/swift/dispatch /usr/lib/swift_static/dispatch
 
 ENV CAMERA_HOST=127.0.0.1 \
     CAMERA_PORT=7400 \

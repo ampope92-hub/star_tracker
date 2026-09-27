@@ -26,12 +26,14 @@ RUN apt-get update \
 COPY requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir --require-hashes --no-deps -r /tmp/requirements.txt && rm -f /tmp/requirements.txt
 
-# The same toolchain the agent had: no Foundation or XCTest module to import.
+# The same toolchain the agent had: no Foundation, Dispatch or XCTest module to import.
 RUN rm -rf /usr/lib/swift/linux/x86_64/Foundation*.swift* /usr/lib/swift/linux/x86_64/XCTest.swift* \
            /usr/lib/swift_static/linux/x86_64/Foundation*.swift* \
            /usr/lib/swift_static/linux/libFoundation*.a /usr/lib/swift_static/linux/libCoreFoundation.a \
            /usr/lib/swift_static/linux/libCFURLSessionInterface.a /usr/lib/swift_static/linux/libCFXMLInterface.a \
-           /usr/lib/swift/CoreFoundation /usr/lib/swift_static/CoreFoundation
+           /usr/lib/swift/CoreFoundation /usr/lib/swift_static/CoreFoundation \
+           /usr/lib/swift/linux/x86_64/Dispatch.swift* /usr/lib/swift_static/linux/x86_64/Dispatch.swift* \
+           /usr/lib/swift/dispatch /usr/lib/swift_static/dispatch
 
 COPY --from=launcher /tool_launch /usr/local/bin/tool_launch
 RUN useradd --create-home --uid 10001 --shell /bin/bash runner

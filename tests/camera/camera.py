@@ -85,8 +85,8 @@ class Camera:
                 i += 1
                 sent += 1
             if i >= len(self.frames):
-                conn.sendall(b"EOS\n")
                 self.log(f"c{cno} EOS after {sent} frames, last {self.counters[-1]}")
+                conn.sendall(b"EOS\n")
             else:
                 conn.sendall(b"LINK DOWN\n")
                 self.log(f"c{cno} LINK DOWN after {sent} frames, next {self.counters[i]}")

@@ -2,7 +2,8 @@
 //
 // Reads every frame of the pass from the camera head (CAMERA_HOST, CAMERA_PORT), resuming after
 // each link drop, and the star catalogue at STAR_CATALOG. Then:
-//   1. spots that sit on the same pixel in a large share of frames are the detector's hot pixels;
+//   1. spots that sit on the same pixel in a large share of frames, before and after a slew, are
+//      the detector's hot pixels;
 //   2. a lost-in-space solve (triangles of bright spots against a sorted pair-angle index of the
 //      brightest catalogue stars, each hypothesis verified against the whole field) starts every
 //      tracking arc; tracking carries the attitude from frame to frame and falls back to a
@@ -11,7 +12,7 @@
 //      with the attitudes, and the pass is solved again with the fitted optics;
 //   4. every catalogue direction is aberrated by the frame's velocity before it is compared with
 //      what the camera saw, so the attitude reported is the geometric one.
-// Prints one line per solved frame: counter w x y z.
+// Prints one line per frame received: counter w x y z.
 import Glibc
 
 // ---------------------------------------------------------------- small vector algebra
@@ -203,7 +204,7 @@ final class Link {
 
 func dial(_ host: String, _ port: String) -> Link? {
     var hints = addrinfo()
-    hints.ai_family = AF_INET
+    hints.ai_family = AF_UNSPEC   // a name or an address, IPv4 or IPv6: try every address returned
     hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
     var res: UnsafeMutablePointer<addrinfo>? = nil
     guard getaddrinfo(host, port, &hints, &res) == 0, let first = res else { return nil }
@@ -306,29 +307,36 @@ final class Sky {
     let zs: [Double]
     // lost-in-space index over the brightest stars: pairs sorted by separation
     let bright: [Int32]
-    var pairA = [Int32](), pairB = [Int32](), pairAng = [Double]()
+    let pairs: PairIndex
+    let maxSep: Double
+    let byMag: [Int]
+    // a second index over every star the camera can report, built the first time a frame
+    // with enough spots is not solved through the bright one
+    var deep: PairIndex? = nil
 
     init(_ stars: [Star], maxSep: Double, brightCount: Int) {
         self.stars = stars
+        self.maxSep = maxSep
         let order = (0..<stars.count).sorted { stars[$0].u.z < stars[$1].u.z }
         byDec = order.map { Int32($0) }
         zs = order.map { stars[$0].u.z }
         let byMag = (0..<stars.count).sorted { stars[$0].m < stars[$1].m }
+        self.byMag = byMag
         bright = byMag.prefix(min(brightCount, stars.count)).map { Int32($0) }
-        let cmin = cos(maxSep)
-        var pa = [Int32](), pb = [Int32](), ang = [Double]()
-        let n = bright.count
-        for i in 0..<n {
-            let ui = stars[Int(bright[i])].u
-            for j in (i + 1)..<n {
-                let d = ui.dot(stars[Int(bright[j])].u)
-                if d >= cmin {
-                    pa.append(bright[i]); pb.append(bright[j]); ang.append(acos(min(1, d)))
-                }
-            }
-        }
-        let idx = (0..<ang.count).sorted { ang[$0] < ang[$1] }
-        pairA = idx.map { pa[$0] }; pairB = idx.map { pb[$0] }; pairAng = idx.map { ang[$0] }
+        pairs = PairIndex(stars, bright, maxSep: maxSep)
+    }
+
+    // Every star down to magnitude `faintest`, capped so the pair index stays near 25 million
+    // pairs (about 400 MB) whatever the catalogue's depth.
+    func deepIndex(faintest: Double) -> PairIndex {
+        if let d = deep { return d }
+        let capShare = (1 - cos(maxSep)) / 2
+        let cap = Int((2 * 25e6 / capShare).squareRoot())
+        let members = byMag.prefix { stars[$0].m <= faintest }.prefix(cap).map { Int32($0) }
+        let d = PairIndex(stars, members, maxSep: maxSep)
+        fputs("tracker: deep index over \(members.count) stars, \(d.ang.count) pairs\n", stderr)
+        deep = d
+        return d
     }
 
     // indices of stars within `radius` (radians) of `dir`
@@ -348,12 +356,35 @@ final class Sky {
         return out
     }
 
-    func pairRange(_ lo: Double, _ hi: Double) -> Range<Int> {
-        var a = 0, b = pairAng.count
-        while a < b { let m = (a + b) / 2; if pairAng[m] < lo { a = m + 1 } else { b = m } }
-        var c = a, d = pairAng.count
-        while c < d { let m = (c + d) / 2; if pairAng[m] <= hi { c = m + 1 } else { d = m } }
-        return a..<c
+}
+
+// Pairs of catalogue stars closer than the field's diagonal, sorted by separation.
+struct PairIndex {
+    var a = [Int32](), b = [Int32](), ang = [Double]()
+
+    init(_ stars: [Star], _ members: [Int32], maxSep: Double) {
+        let cmin = cos(maxSep)
+        var pa = [Int32](), pb = [Int32](), an = [Double]()
+        let n = members.count
+        for i in 0..<n {
+            let ui = stars[Int(members[i])].u
+            for j in (i + 1)..<n {
+                let d = ui.dot(stars[Int(members[j])].u)
+                if d >= cmin {
+                    pa.append(members[i]); pb.append(members[j]); an.append(acos(min(1, d)))
+                }
+            }
+        }
+        let idx = (0..<an.count).sorted { an[$0] < an[$1] }
+        a = idx.map { pa[$0] }; b = idx.map { pb[$0] }; ang = idx.map { an[$0] }
+    }
+
+    func range(_ lo: Double, _ hi: Double) -> Range<Int> {
+        var x = 0, y = ang.count
+        while x < y { let m = (x + y) / 2; if ang[m] < lo { x = m + 1 } else { y = m } }
+        var c = x, d = ang.count
+        while c < d { let m = (c + d) / 2; if ang[m] <= hi { c = m + 1 } else { d = m } }
+        return x..<c
     }
 }
 
@@ -436,8 +467,8 @@ final class Tracker {
         return Solution(att: att, matches: matches, rms: rms)
     }
 
-    // Lost in space: triangles of bright spots against the pair index, each verified on the field.
-    func lostInSpace(_ fr: Frame, tolFrac: Double, tolAbs: Double, verifyTol: Double) -> Solution? {
+    // Lost in space: triangles of bright spots against a pair index, each verified on the field.
+    func lostInSpace(_ fr: Frame, _ index: PairIndex, tolFrac: Double, tolAbs: Double, verifyTol: Double) -> Solution? {
         var order = [Int]()
         for (j, s) in fr.spots.enumerated() where !s.hot { order.append(j) }
         if order.count < 4 { return nil }
@@ -453,19 +484,19 @@ final class Tracker {
             let dab = acos(min(1, vec[a].dot(vec[b]))), dac = acos(min(1, vec[a].dot(vec[c]))), dbc = acos(min(1, vec[b].dot(vec[c])))
             if dab < 0.004 || dac < 0.004 || dbc < 0.004 { continue }
             let tab = tolFrac * dab + tolAbs, tac = tolFrac * dac + tolAbs, tbc = tolFrac * dbc + tolAbs
-            let rab = sky.pairRange(dab - tab, dab + tab)
-            let rac = sky.pairRange(dac - tac, dac + tac)
+            let rab = index.range(dab - tab, dab + tab)
+            let rac = index.range(dac - tac, dac + tac)
             if rab.isEmpty || rac.isEmpty { continue }
             // partners of each star across the a-c candidates
             var acMap = [Int32: [Int32]]()
             for p in rac {
-                acMap[sky.pairA[p], default: []].append(sky.pairB[p])
-                acMap[sky.pairB[p], default: []].append(sky.pairA[p])
+                acMap[index.a[p], default: []].append(index.b[p])
+                acMap[index.b[p], default: []].append(index.a[p])
             }
             let handed = vec[a].dot(vec[b].cross(vec[c])) > 0
             let cbcLo = cos(dbc + tbc), cbcHi = cos(max(0, dbc - tbc))
             for p in rab {
-                for (sa, sb) in [(sky.pairA[p], sky.pairB[p]), (sky.pairB[p], sky.pairA[p])] {
+                for (sa, sb) in [(index.a[p], index.b[p]), (index.b[p], index.a[p])] {
                     guard let cs = acMap[sa] else { continue }
                     let ub = stars[Int(sb)].u, ua = stars[Int(sa)].u
                     for sc in cs where sc != sb {
@@ -504,12 +535,22 @@ func main() {
     let stars = loadCatalogue(catPath)
     if stars.count < 10 { fail("the catalogue at \(catPath) holds \(stars.count) stars") }
 
-    // Hot pixels: a spot on the same spot of the detector in a large share of the frames.
-    var seen = [Int: Int]()
-    for fr in frames { for s in fr.spots { seen[Int((s.x * 4).rounded()) * 8192 + Int((s.y * 4).rounded()), default: 0] += 1 } }
+    // Hot pixels: a spot on the same spot of the detector in a large share of the frames, and on
+    // both sides of a counter jump. The sky moves across a slew; a detector defect does not.
+    var seen = [Int: (n: Int, first: Int, last: Int)]()
+    var arc = 0
+    for (i, fr) in frames.enumerated() {
+        if i > 0 && fr.counter - frames[i - 1].counter > 1 { arc += 1 }
+        for s in fr.spots {
+            let key = Int((s.x * 4).rounded()) * 8192 + Int((s.y * 4).rounded())
+            let e = seen[key] ?? (0, arc, arc)
+            seen[key] = (e.n + 1, e.first, arc)
+        }
+    }
     var hotKeys = Set<Int>()
-    for (key, n) in seen where n * 5 > frames.count { hotKeys.insert(key) }
+    for (key, e) in seen where e.n * 5 > frames.count && e.last > e.first { hotKeys.insert(key) }
     var minCounts = 1e9
+    let maxExposure = frames.map { $0.exposure }.max() ?? 1
     for i in 0..<frames.count {
         for j in 0..<frames[i].spots.count {
             let s = frames[i].spots[j]
@@ -528,7 +569,7 @@ func main() {
 
     // Pass 1: nominal optics, loose tolerances.
     var sols = [Int: Solution]()
-    func runPass(tolTrack: Double, lisFrac: Double, lisAbs: Double, lisVerify: Double, prior: [Int: Solution]?) -> [Int: Solution] {
+    func runPass(tolTrack: Double, lisFrac: Double, lisAbs: Double, lisVerify: Double, deep: Bool, prior: [Int: Solution]?) -> [Int: Solution] {
         var out = [Int: Solution]()
         var prev: (Int, M3)? = nil, prev2: (Int, M3)? = nil
         var lisCalls = 0
@@ -550,7 +591,15 @@ func main() {
                 }
                 if sol == nil {
                     lisCalls += 1
-                    sol = tracker.lostInSpace(fr, tolFrac: lisFrac, tolAbs: lisAbs, verifyTol: lisVerify)
+                    sol = tracker.lostInSpace(fr, sky.pairs, tolFrac: lisFrac, tolAbs: lisAbs, verifyTol: lisVerify)
+                }
+                // Six or more usable spots and no answer through the bright stars: try every star the
+                // camera can report, down to the faintest magnitude its weakest spot at the longest
+                // exposure stands for (the whole catalogue until the photometry is known). First pass
+                // only: what it finds is refined with the fitted optics like every other solution.
+                if deep && sol == nil && fr.spots.filter({ !$0.hot }).count >= 6 {
+                    let faintest = tracker.zpKnown ? tracker.zp - 2.5 * log10(minCounts / maxExposure) + 0.3 : 99
+                    sol = tracker.lostInSpace(fr, sky.deepIndex(faintest: faintest), tolFrac: lisFrac, tolAbs: lisAbs, verifyTol: lisVerify)
                 }
             }
             if let s = sol {
@@ -570,7 +619,7 @@ func main() {
         return out
     }
 
-    sols = runPass(tolTrack: 9, lisFrac: 0.012, lisAbs: 0.0012, lisVerify: 9, prior: nil)
+    sols = runPass(tolTrack: 9, lisFrac: 0.012, lisAbs: 0.0012, lisVerify: 9, deep: true, prior: nil)
     let t3 = clockSeconds()
 
     // Fit the unit's focal length and distortion to every matched star, jointly with the attitudes.
@@ -605,15 +654,18 @@ func main() {
         sols = next
     }
     // Pass 2 with the fitted optics: frames lost in pass 1 get another chance.
-    let calibrated = runPass(tolTrack: 3, lisFrac: 0.002, lisAbs: 0.0004, lisVerify: 3, prior: nil)
+    let calibrated = runPass(tolTrack: 3, lisFrac: 0.002, lisAbs: 0.0004, lisVerify: 3, deep: false, prior: nil)
     for (c, s) in calibrated where sols[c] == nil { sols[c] = s }
     let t4 = clockSeconds()
 
+    // One line for every frame received. A frame with no solution (the Earth in the field, too few
+    // stars) repeats the last solved attitude, or the identity before the first one.
     var out = ""
-    out.reserveCapacity(sols.count * 80)
+    out.reserveCapacity(frames.count * 80)
+    var att = M3(r0: V3(1, 0, 0), r1: V3(0, 1, 0), r2: V3(0, 0, 1))
     for fr in frames {
-        guard let s = sols[fr.counter] else { continue }
-        let q = qFromMat(s.att)
+        if let s = sols[fr.counter] { att = s.att }
+        let q = qFromMat(att)
         out += "\(fr.counter) \(q[0]) \(q[1]) \(q[2]) \(q[3])\n"
     }
     fputs(out, stdout)

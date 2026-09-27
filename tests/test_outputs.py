@@ -37,15 +37,16 @@ def status(name):
 
 
 def report(name):
-    """The run's stdout: one line per frame, the counter then w x y z. A final newline is optional."""
+    """The run's stdout: one line per frame, the counter then w x y z separated by single spaces. A
+    final newline is optional."""
     code, elapsed = status(name)
     assert elapsed < TIME_LIMIT, f"the {name} run was still going at the {TIME_LIMIT:.0f} s limit"
     text = read_text(os.path.join(RUN, f"report_{name}.txt"))
     assert text.strip(), f"the {name} run printed nothing (exit status {code})"
     lines = {}
     for n, line in enumerate(text.splitlines(), 1):
-        f = line.split()
-        assert len(f) == 5, f"{name} line {n} is not a counter and four numbers: {line[:80]!r}"
+        f = line.split(" ")
+        assert len(f) == 5, f"{name} line {n} is not a counter and four numbers split by single spaces: {line[:80]!r}"
         try:
             counter = int(f[0])
             q = [float(x) for x in f[1:]]
@@ -85,10 +86,7 @@ def graded_errors(name):
     rep, g = report(name), golden(name)
     out = {}
     for c in g["graded"]:
-        got = rep.get(c)
-        assert got, f"{name}: graded frame {c} has no line"
-        assert len(got) == 1, f"{name}: graded frame {c} has {len(got)} lines"
-        out[c] = errors(g["q"][str(c)], got[0])
+        out[c] = errors(g["q"][str(c)], rep[c][0])
     return out
 
 
@@ -99,14 +97,16 @@ def test_tracker_built():
 
 
 @pytest.mark.parametrize("name", PASSES)
-def test_every_graded_frame_has_one_line(name):
-    """Every frame with six or more catalogue stars detected has exactly one well-formed line, and the
-    camera head really did drop the link mid-pass and reach the end of it."""
+def test_one_line_per_frame(name):
+    """Every frame the camera head sent has exactly one well-formed line and no other line is printed,
+    and the camera head really did drop the link mid-pass and reach the end of it."""
     rep, g = report(name), golden(name)
-    missing = [c for c in g["graded"] if c not in rep]
-    assert not missing, f"{name}: {len(missing)} graded frame(s) have no line, e.g. {missing[:5]}"
-    doubled = [c for c in g["graded"] if len(rep[c]) > 1]
-    assert not doubled, f"{name}: graded frame(s) with more than one line, e.g. {doubled[:5]}"
+    missing = [c for c in g["frames"] if c not in rep]
+    assert not missing, f"{name}: {len(missing)} frame(s) have no line, e.g. {missing[:5]}"
+    extra = sorted(set(rep) - set(g["frames"]))
+    assert not extra, f"{name}: lines for counters the camera head never sent, e.g. {extra[:5]}"
+    doubled = [c for c in g["frames"] if len(rep[c]) > 1]
+    assert not doubled, f"{name}: frame(s) with more than one line, e.g. {doubled[:5]}"
     log = read_text(os.path.join(RUN, f"camera_{name}.log"))
     assert log.count("LINK DOWN") >= 2 and " EOS " in log, f"{name}: the camera head's link drops never came up"
 

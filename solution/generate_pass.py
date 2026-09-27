@@ -23,8 +23,8 @@ detector positions in every frame, particle hits land at random, and a planet th
 catalogue is bright wherever it falls in the field.
 
 Writes DIR/catalog.txt, DIR/pass.txt (the camera head's wire format, preceded by one UNIT line)
-and DIR/truth.json (the list of graded frames, those in which at least six catalogue stars were
-detected, and the true attitude quaternion (w, x, y, z) of each). The shipped files are these
+and DIR/truth.json (the counter of every frame sent, the list of graded frames, those in which at
+least six catalogue stars were detected, and the true attitude quaternion (w, x, y, z) of each). The shipped files are these
 outputs: environment/camera/pass.txt and environment/app/sky/catalog.txt are the sample pass,
 tests/data/<pass>/ and tests/golden/<pass>.json the two graded passes.
 """
@@ -291,6 +291,7 @@ def main():
     lines_out = []
     truth = {}
     graded = []
+    sent_frames = []
     stats = {"frames": 0, "graded": 0, "slews": 0, "eclipses": 0, "spots": 0, "star_spots": 0, "blends": 0,
              "planet_frames": 0, "max_aberr": 0.0}
 
@@ -390,6 +391,7 @@ def main():
             stats["spots"] += len(merged)
             stats["star_spots"] += nstar
             lines_out.append(f"FRAME {counter} {exposure} {v[0]:.4f} {v[1]:.4f} {v[2]:.4f} {len(merged)}")
+            sent_frames.append(counter)
             for s in merged:
                 lines_out.append(f"{s[0]:.3f} {s[1]:.3f} {round(s[2])}")
             if nstar >= 6:
@@ -407,7 +409,7 @@ def main():
         fh.write(f"UNIT {cfg['unit']} {cfg['f0']:.1f} {SIZE}\n")
         fh.write("\n".join(lines_out) + "\n")
     with open(os.path.join(args.out, "truth.json"), "w") as fh:
-        json.dump({"unit": cfg["unit"], "graded": graded, "q": truth}, fh, separators=(",", ":"))
+        json.dump({"unit": cfg["unit"], "graded": graded, "frames": sent_frames, "q": truth}, fh, separators=(",", ":"))
     stats["f_true"], stats["k_true"] = f_true, k_true
     stats["segments"] = [[k, n] for k, n, _ in segs]
     print(json.dumps(stats))
