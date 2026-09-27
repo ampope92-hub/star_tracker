@@ -24,7 +24,7 @@ class Camera:
         self.frames = []          # (counter, bytes)
         with open(a.data, "rb") as fh:
             head = fh.readline().decode().split()
-            self.unit, self.f0, self.size = head[1], head[2], head[3]
+            unit, f0, size = head[1], head[2], head[3]
             cur_c, cur = None, []
             for raw in fh:
                 if raw.startswith(b"FRAME "):
@@ -35,6 +35,7 @@ class Camera:
                     cur.append(raw)
             if cur_c is not None:
                 self.frames.append((cur_c, b"".join(cur)))
+        self.greeting = f"STC1 {unit} f={f0} size={size}"
         self.counters = [c for c, _ in self.frames]
         self.link, self.first_link, self.idle = a.link, a.first_link, a.idle
         self.logpath = a.log
@@ -65,7 +66,7 @@ class Camera:
         self.log(f"c{cno} OPEN link={n_link}")
         rfile = conn.makefile("rb")
         try:
-            conn.sendall(f"STC1 {self.unit} f={self.f0} size={self.size} link={n_link}\n".encode())
+            conn.sendall(f"{self.greeting} link={n_link}\n".encode())
             while True:
                 raw = rfile.readline(256)
                 if not raw:
