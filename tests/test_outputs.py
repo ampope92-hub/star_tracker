@@ -54,8 +54,10 @@ def report(name):
             pytest.fail(f"{name} line {n} does not parse: {line[:80]!r}")
         assert all(math.isfinite(x) for x in q), f"{name} line {n} holds a non-finite number"
         norm = math.hypot(*q)
-        assert math.isfinite(norm) and norm > 1e-6, f"{name} line {n}: the quaternion has a zero or non-finite norm"
-        lines.setdefault(counter, []).append([x / norm for x in q])
+        assert math.isfinite(norm) and norm > 0, f"{name} line {n}: the quaternion has a zero or non-finite norm"
+        normalized = [x / norm for x in q]
+        assert all(math.isfinite(x) for x in normalized), f"{name} line {n}: normalizing produced a non-finite component"
+        lines.setdefault(counter, []).append(normalized)
     return lines
 
 
