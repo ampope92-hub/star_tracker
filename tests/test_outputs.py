@@ -6,6 +6,7 @@ into this image."""
 import json
 import math
 import os
+import re
 
 import pytest
 
@@ -18,6 +19,8 @@ BORESIGHT_CAP = 60.0     # arcsec, on every graded frame
 ROLL_BAR = 180.0         # arcsec, on every graded frame
 TIME_LIMIT = 120.0
 ARCSEC = 180.0 / math.pi * 3600.0
+COUNTER_TOKEN = re.compile(r"^[0-9]+$")
+FLOAT_TOKEN = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
 
 
 def read_text(path):
@@ -49,11 +52,10 @@ def report(name):
         assert line[:1].isdigit(), f"{name} line {n} does not start with the frame counter: {line[:80]!r}"
         f = [x for x in line.split(" ") if x]
         assert len(f) == 5, f"{name} line {n} is not a counter and four numbers separated by spaces: {line[:80]!r}"
-        try:
-            counter = int(f[0])
-            q = [float(x) for x in f[1:]]
-        except ValueError:
-            pytest.fail(f"{name} line {n} does not parse: {line[:80]!r}")
+        assert COUNTER_TOKEN.match(f[0]), f"{name} line {n} counter field is not a bare integer: {f[0]!r}"
+        assert all(FLOAT_TOKEN.match(x) for x in f[1:]), f"{name} line {n} has a quaternion field that is not a plain number: {line[:80]!r}"
+        counter = int(f[0])
+        q = [float(x) for x in f[1:]]
         assert all(math.isfinite(x) for x in q), f"{name} line {n} holds a non-finite number"
         norm = math.hypot(*q)
         assert math.isfinite(norm) and norm > 0, f"{name} line {n}: the quaternion has a zero or non-finite norm"
