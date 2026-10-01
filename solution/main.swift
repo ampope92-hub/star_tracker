@@ -326,15 +326,13 @@ final class Sky {
         pairs = PairIndex(stars, bright, maxSep: maxSep)
     }
 
-    // Every star down to magnitude `faintest`, capped so the pair index stays near 25 million
-    // pairs (about 400 MB) whatever the catalogue's depth.
+    // Every star down to magnitude `faintest`, none left out. Pairs are packed in eight bytes,
+    // so even a whole 60,000-star flight catalogue (about 58 million pairs) stays near 460 MB.
     func deepIndex(faintest: Double) -> PairIndex {
         if let d = deep { return d }
-        let capShare = (1 - cos(maxSep)) / 2
-        let cap = Int((2 * 25e6 / capShare).squareRoot())
-        let members = byMag.prefix { stars[$0].m <= faintest }.prefix(cap).map { Int32($0) }
+        let members = byMag.prefix { stars[$0].m <= faintest }.map { Int32($0) }
         let d = PairIndex(stars, members, maxSep: maxSep)
-        fputs("tracker: deep index over \(members.count) stars, \(d.ang.count) pairs\n", stderr)
+        fputs("tracker: deep index over \(members.count) stars, \(d.count) pairs\n", stderr)
         deep = d
         return d
     }
@@ -358,32 +356,43 @@ final class Sky {
 
 }
 
-// Pairs of catalogue stars closer than the field's diagonal, sorted by separation.
+// Pairs of catalogue stars closer than the field's diagonal, sorted by separation. Each pair is
+// one key: the separation in the top 32 bits (in units of maxSep / 2^32), then the two star
+// indices in 16 bits each, which holds any catalogue up to 65,536 stars.
 struct PairIndex {
-    var a = [Int32](), b = [Int32](), ang = [Double]()
+    var keys = [UInt64]()
+    let scale: Double
 
     init(_ stars: [Star], _ members: [Int32], maxSep: Double) {
+        if stars.count > 65536 { fail("the catalogue holds \(stars.count) stars, more than the pair index can address") }
         let cmin = cos(maxSep)
-        var pa = [Int32](), pb = [Int32](), an = [Double]()
+        scale = 4294967295 / maxSep
         let n = members.count
+        keys.reserveCapacity(Int(Double(n) * Double(n) * (1 - cmin) / 4 * 1.1) + 1024)
         for i in 0..<n {
             let ui = stars[Int(members[i])].u
+            let hi = UInt64(UInt16(members[i])) << 16
             for j in (i + 1)..<n {
                 let d = ui.dot(stars[Int(members[j])].u)
                 if d >= cmin {
-                    pa.append(members[i]); pb.append(members[j]); an.append(acos(min(1, d)))
+                    let q = UInt64(min(acos(min(1, d)) * scale, 4294967295))
+                    keys.append(q << 32 | hi | UInt64(UInt16(members[j])))
                 }
             }
         }
-        let idx = (0..<an.count).sorted { an[$0] < an[$1] }
-        a = idx.map { pa[$0] }; b = idx.map { pb[$0] }; ang = idx.map { an[$0] }
+        keys.sort()
     }
 
+    var count: Int { keys.count }
+    func a(_ p: Int) -> Int32 { Int32((keys[p] >> 16) & 0xFFFF) }
+    func b(_ p: Int) -> Int32 { Int32(keys[p] & 0xFFFF) }
+    func ang(_ p: Int) -> Double { Double(keys[p] >> 32) / scale }
+
     func range(_ lo: Double, _ hi: Double) -> Range<Int> {
-        var x = 0, y = ang.count
-        while x < y { let m = (x + y) / 2; if ang[m] < lo { x = m + 1 } else { y = m } }
-        var c = x, d = ang.count
-        while c < d { let m = (c + d) / 2; if ang[m] <= hi { c = m + 1 } else { d = m } }
+        var x = 0, y = keys.count
+        while x < y { let m = (x + y) / 2; if ang(m) < lo { x = m + 1 } else { y = m } }
+        var c = x, d = keys.count
+        while c < d { let m = (c + d) / 2; if ang(m) <= hi { c = m + 1 } else { d = m } }
         return x..<c
     }
 }
@@ -490,13 +499,13 @@ final class Tracker {
             // partners of each star across the a-c candidates
             var acMap = [Int32: [Int32]]()
             for p in rac {
-                acMap[index.a[p], default: []].append(index.b[p])
-                acMap[index.b[p], default: []].append(index.a[p])
+                acMap[index.a(p), default: []].append(index.b(p))
+                acMap[index.b(p), default: []].append(index.a(p))
             }
             let handed = vec[a].dot(vec[b].cross(vec[c])) > 0
             let cbcLo = cos(dbc + tbc), cbcHi = cos(max(0, dbc - tbc))
             for p in rab {
-                for (sa, sb) in [(index.a[p], index.b[p]), (index.b[p], index.a[p])] {
+                for (sa, sb) in [(index.a(p), index.b(p)), (index.b(p), index.a(p))] {
                     guard let cs = acMap[sa] else { continue }
                     let ub = stars[Int(sb)].u, ua = stars[Int(sa)].u
                     for sc in cs where sc != sb {
