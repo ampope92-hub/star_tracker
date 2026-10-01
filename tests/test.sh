@@ -70,12 +70,20 @@ echo "verifier files closed to the unprivileged build user"
 # What is compiled is Swift source and nothing else, by construction: the regular .swift files
 # directly under /app/tracker are copied into a root-owned pristine directory and rebuilt from
 # there with the command the instruction states. A .swift file anywhere below /app/tracker but
-# not directly in it fails the build check outright, instead of being silently skipped. A link,
-# a package manifest or anything else that is not a .swift file never reaches the compiler, and
-# the toolchain has no Foundation module to import.
+# not directly in it fails the build check outright, instead of being silently skipped, and so
+# does a .swift entry sitting directly in the folder that is not itself a regular file (a direct
+# symlink, even one pointing at another regular .swift file, counts as non-regular). Anything
+# else that is not a .swift file never reaches the compiler, and the toolchain has no Foundation
+# module to import.
 if /usr/bin/find /app/tracker -mindepth 2 -name '*.swift' -print -quit 2>/dev/null | /usr/bin/grep -q .; then
   echo "FATAL: a .swift file sits in a subdirectory of /app/tracker, not directly in it"
   echo "nested .swift file" > /opt/run/build_check.txt
+  echo 0 > /logs/verifier/reward.txt
+  exit 0
+fi
+if /usr/bin/find /app/tracker -mindepth 1 -maxdepth 1 -name '*.swift' -not -type f -print -quit 2>/dev/null | /usr/bin/grep -q .; then
+  echo "FATAL: a .swift file directly in /app/tracker is not a regular file"
+  echo "non-regular .swift entry" > /opt/run/build_check.txt
   echo 0 > /logs/verifier/reward.txt
   exit 0
 fi
