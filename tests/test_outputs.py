@@ -41,6 +41,7 @@ def report(name):
     final newline is optional."""
     code, elapsed = status(name)
     assert elapsed < TIME_LIMIT, f"the {name} run was still going at the {TIME_LIMIT:.0f} s limit"
+    assert code == 0, f"the {name} run exited with status {code} instead of 0"
     text = read_text(os.path.join(RUN, f"report_{name}.txt"))
     assert text.strip(), f"the {name} run printed nothing (exit status {code})"
     lines = {}
