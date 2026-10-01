@@ -69,9 +69,17 @@ echo "verifier files closed to the unprivileged build user"
 
 # What is compiled is Swift source and nothing else, by construction: the regular .swift files
 # directly under /app/tracker are copied into a root-owned pristine directory and rebuilt from
-# there with the command the instruction states. A link, a subdirectory, a package manifest or
-# anything that is not a .swift file never reaches the compiler, and the toolchain has no
-# Foundation module to import.
+# there with the command the instruction states. A .swift file anywhere below /app/tracker but
+# not directly in it fails the build check outright, instead of being silently skipped. A link,
+# a package manifest or anything else that is not a .swift file never reaches the compiler, and
+# the toolchain has no Foundation module to import.
+if /usr/bin/find /app/tracker -mindepth 2 -name '*.swift' -print -quit 2>/dev/null | /usr/bin/grep -q .; then
+  echo "FATAL: a .swift file sits in a subdirectory of /app/tracker, not directly in it"
+  echo "nested .swift file" > /opt/run/build_check.txt
+  echo 0 > /logs/verifier/reward.txt
+  exit 0
+fi
+
 rm -rf /opt/src_pristine
 /usr/bin/install -d -m 700 -o root -g root /opt/src_pristine
 for f in /app/tracker/*.swift; do

@@ -46,7 +46,8 @@ def report(name):
     assert text.strip(), f"the {name} run printed nothing (exit status {code})"
     lines = {}
     for n, line in enumerate(text.splitlines(), 1):
-        f = [x for x in line.strip(" ").split(" ") if x]
+        assert line[:1].isdigit(), f"{name} line {n} does not start with the frame counter: {line[:80]!r}"
+        f = [x for x in line.split(" ") if x]
         assert len(f) == 5, f"{name} line {n} is not a counter and four numbers separated by spaces: {line[:80]!r}"
         try:
             counter = int(f[0])
