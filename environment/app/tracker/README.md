@@ -34,11 +34,11 @@ with one line per spot after the `FRAME` line. `START 0` gets the pass from the 
 - The counter goes up by one every 0.1 s. While the spacecraft slews faster than the camera
   can centroid, the camera head sends nothing, so the counter jumps.
 - `vx vy vz`: the spacecraft's velocity relative to the solar-system barycentre, ICRS axes,
-  km/s, as the navigation filter had it at mid-exposure. The camera head stamps every frame
-  with it.
+  km/s, as the navigation filter had it at mid-exposure. The camera head replays frames the
+  flight unit recorded in orbit; the spots are where the stars appeared on the detector at
+  the time of each exposure.
 - A spot is `x` (detector column) and `y` (detector row) in pixels, pixel centres at whole
-  numbers from 0 to `size - 1`, and the spot's summed signal in counts. The ADC saturates at
-  65535. Signal scales with exposure; the auto-exposure changes it now and then.
+  numbers from 0 to `size - 1`, and the spot's summed signal in counts.
 - Not every spot is a star. The detector has a few hot pixels, particle hits land anywhere,
   planets are not in the catalogue, and when the Earth is in the field (eclipse) the limb
   throws glints and no stars get through. Two stars closer than about 2.5 px come out as one
